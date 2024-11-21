@@ -12,7 +12,7 @@ Sys.setlocale("LC_ALL", "en_US.UTF-8")
 # ------------------------------------------------------------------------------
 
 # ----- GLOBAL FINCTIONS -------------------------------------------------------
-
+# test addition
 
 # get input in the form of "XXh XXm XXs",
 # and convert into duration in minutes rounded to 2 decimals

@@ -154,7 +154,7 @@ extract_attendance_table <- function(att_file){
     
     colnames(attendance_raw) <- c("Name", "First.Join", "Last.Leave", 
                                   "In.Meeting.Duration", "Email", 
-                                  "Participant.ID..UPN.", "Role")
+                                  "Participant.ID.UPN.", "Role")
     
     
     meeting_start <- get_start_end(att_file)[1]
@@ -197,6 +197,32 @@ extract_attendance_table <- function(att_file){
                "join(min after Organiser)" = NA)
     }
     
+    # multi join part
+    multi_join <- str_match(att_file, "3. Toplantı İçi Etkinlikler\n([\\S\\s]*)$")[[2]]
+    multi_join <- strsplit(multi_join, "\n")[[1]]
+    multi_join <- read.table(text = multi_join, header = T,
+                             sep = "\t", comment.char = "")
+    
+    colnames(multi_join) <- c("Name", "Join", "Leave",
+                              "Duration", "Email", "Role")
+    
+    multi_join_processed <- multi_join %>%
+      mutate("multi_duration(min)" = sapply(Duration, convert_time_to_min_tr),
+             "multi_join(min after start)" = sapply(Join, function (x)
+               convert_time_to_min_en(time_difference_as_duration(meeting_start,
+                                                                  get_time_from_date_comma_time(x)))),
+             "multi_leave(min after start)" = sapply(Leave, function (x)
+               convert_time_to_min_en(time_difference_as_duration(meeting_start,
+                                                                  get_time_from_date_comma_time(x))))) %>%
+      select(Email, "multi_join(min after start)", "multi_leave(min after start)", "multi_duration(min)") %>% 
+      group_by(Email) %>% 
+      summarize(across(c("multi_join(min after start)", "multi_leave(min after start)", "multi_duration(min)"), 
+                       list), .groups = "drop")
+    
+  
+    attendance_processed <- attendance_processed %>% 
+      left_join(multi_join_processed, by = "Email")
+    
     return(attendance_processed)
     
     }else if (detect_lang(att_file) == "Summary"){
@@ -207,7 +233,7 @@ extract_attendance_table <- function(att_file){
   
     colnames(attendance_raw) <- c("Name", "First.Join", "Last.Leave", 
                                   "In.Meeting.Duration", "Email", 
-                                  "Participant.ID..UPN.", "Role")
+                                  "Participant.ID.UPN.", "Role")
     
     
     meeting_start <- get_start_end(att_file)[1]
@@ -250,6 +276,30 @@ extract_attendance_table <- function(att_file){
                "join(min after Organiser)" = NA)
     }
     
+    # multi join part
+    multi_join <- str_match(att_file, "3. In-Meeting Activities\n([\\S\\s]*)$")[[2]]
+    multi_join <- strsplit(multi_join, "\n")[[1]]
+    multi_join <- read.table(text = multi_join, header = T,
+                             sep = "\t", comment.char = "")
+    
+    colnames(multi_join) <- c("Name", "Join", "Leave",
+                              "Duration", "Email", "Role")
+    
+    multi_join_processed <- multi_join %>%
+      mutate("multi_duration(min)" = sapply(Duration, convert_time_to_min_en),
+             "multi_join(min after start)" = sapply(Join, function (x)
+               convert_time_to_min_en(time_difference_as_duration(meeting_start,
+                                                                  get_time_from_date_comma_time(x)))),
+             "multi_leave(min after start)" = sapply(Leave, function (x)
+               convert_time_to_min_en(time_difference_as_duration(meeting_start,
+                                                                  get_time_from_date_comma_time(x))))) %>%
+      select(Email, "multi_join(min after start)", "multi_leave(min after start)", "multi_duration(min)") %>% 
+      group_by(Email) %>% 
+      summarize(across(everything(), list), .groups = "drop")
+    
+    
+    attendance_processed <- attendance_processed %>% 
+      left_join(multi_join_processed, by = "Email")
     
     return(attendance_processed)
     }
@@ -268,6 +318,16 @@ read_teams_record_csv <- function(file_path){
 # plot total number of attendees at each time point
 plot_attendees_by_time <- function(att_table, att_raw, 
                                    start_point, end_point, min_duration){
+  
+  att_segment <- att_table %>% 
+    rowwise() %>%
+    mutate(intervals = list(data.frame(
+      x_start = `multi_join(min after start)`,
+      x_end = `multi_leave(min after start)`,
+      y = Email
+    ))) %>%
+    unnest(intervals)
+  
   meeting_duration <- get_duration_time(att_raw)
   n_attendees <- c()
   time_points <-  seq(0, meeting_duration, 1)
@@ -298,18 +358,18 @@ plot_attendees_by_time <- function(att_table, att_raw,
       legend.background = element_blank(),
       legend.title = element_blank()
     )+
-    geom_segment(data=att_table, aes(y = as.numeric(as.factor(Email)),
-                                 yend = as.numeric(as.factor(Email)),
-                                 x = `join(min after start)`,
-                                 xend = `leave(min after start)`), 
+    geom_segment(data=att_segment, aes(y = as.numeric(as.factor(y)),
+                                       yend = as.numeric(as.factor(y)),
+                                       x = x_start,
+                                       xend = x_end), 
                  inherit.aes = FALSE, size = 1, alpha = 0.2,
                  color = as.factor(ifelse(
-                   as.logical((att_table$`duration(min)` > min_duration) *
-                                (att_table$`join(min after start)` < start_point) *
-                                (att_table$`leave(min after start)` > end_point)),
+                   as.logical((att_segment$`duration(min)` > min_duration) *
+                                (att_segment$`join(min after start)` < start_point) *
+                                (att_segment$`leave(min after start)` > end_point)),
                    "blue",
                    "black"))
-                 ) # reconsider colors
+    ) # reconsider colors
 }
 
 # from all recards uploaded, form a list that holds all names and Emails
@@ -753,7 +813,7 @@ server <- function(input, output, session) {
   })
   
   # this output keeps the selected record table after selecting an Organiser
-  output$single_record_table <- renderTable({
+  output$single_record_table <- renderDataTable({
     if(is.null(input$file)){return()}
     srt()
   })
@@ -1008,14 +1068,14 @@ server <- function(input, output, session) {
       tabsetPanel(id="tabsets",
                   tabPanel("Uploaded Records", tableOutput("tb")),
                   tabPanel("Individual Record Data", 
-                           tableOutput("single_record_table")),
+                           dataTableOutput("single_record_table")),
                   selected = selected_tabset()
       )
     }else{
       tabsetPanel(id="tabsets",
                   tabPanel("Uploaded Records", tableOutput("tb")),
                   tabPanel("Individual Record Data", 
-                           tableOutput("single_record_table")),
+                           dataTableOutput("single_record_table")),
                   tabPanel("Individual Record Plot", 
                            plotOutput("single_record_plot"),
                            uiOutput("single_record_info")),

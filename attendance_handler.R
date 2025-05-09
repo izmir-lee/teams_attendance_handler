@@ -1,5 +1,5 @@
 # ----- setup ------------------------------------------------------------------
-required <- c("dplyr", "stringr", "ggplot2", "shiny", "shinyjs")
+required <- c("tidyr", "dplyr", "stringr", "ggplot2", "shiny", "shinyjs", "sortable")
 to_be_installed <- required[!(required %in% installed.packages()[,"Package"])]
 if(length(to_be_installed)){
   install.packages(to_be_installed)
@@ -362,7 +362,7 @@ plot_attendees_by_time <- function(att_table, att_raw,
                                        yend = as.numeric(as.factor(y)),
                                        x = x_start,
                                        xend = x_end), 
-                 inherit.aes = FALSE, size = 1, alpha = 0.2,
+                 inherit.aes = FALSE, linewidth = 1, alpha = 0.2,
                  color = as.factor(ifelse(
                    as.logical((att_segment$`duration(min)` > min_duration) *
                                 (att_segment$`join(min after start)` < start_point) *
@@ -599,7 +599,7 @@ server <- function(input, output, session) {
   raw_files <- reactiveVal()
   records <- reactiveVal()
   rec_edit <- reactiveVal() # this vector holds how many times each record was edited in plot tab
-  
+  rank_list_rec <- reactiveVal()
   # wait for file upload to update, and if the files are actually imported...
   observeEvent(input$file, {
     if(!is.null(input$file)){
@@ -616,12 +616,31 @@ server <- function(input, output, session) {
       rec <- lapply(raw_files(), 
                     function(x) extract_attendance_table(unlist(x)))
       names(rec) <- input$file$name
+      
       records(rec)
+      if(any(checkOrg())){
+        selected_record_index(which(names(records()) == 
+                                      names(records())[checkOrg()][[1]]))
+        selected_record_name(names(records())[checkOrg()][[1]])
+      }else{
+        selected_record_index(which(names(records()) == 
+                                      names(records())[[1]]))
+        selected_record_name(names(records())[[1]])
+      }
+      
       }})
+  
   # to get all attendees across all records
   all_nea <- reactiveVal(NULL)
   observeEvent(records(), {
     if(!is.null(records())){
+      # order records
+      rank_list_rec(rank_list(
+        text = "Order records chronologically",
+        labels = names(records()),
+        input_id = "order_rec"
+      ))
+      
       att_list <- form_attendance_list(records())
       att_list <- data.frame(cbind(att_list,
                                    data.frame("total" = as.integer(rep(0, nrow(att_list)))),
@@ -631,6 +650,13 @@ server <- function(input, output, session) {
       
       rec_edit(rep(0, length(names(records())))) # this vector holds how many times each record was edited in plot tab
     }
+  })
+  
+  # change order of records based on rank list input?
+  observeEvent(input$order_rec, {
+    rec <- records()
+    rec <- rec[input$order_rec]
+    records(rec)
   })
   
   # show the drop down menu to select a specific record
@@ -744,21 +770,48 @@ server <- function(input, output, session) {
     if(is.null(input$file)){return()}
     if (any(checkOrg())){
       to_check <- paste(names(records())[checkOrg()], collapse = ", ")
-      if(!is.null(input$tabsets) && input$tabsets != default_tabset){
-        list(
-          helpText("These records do not have an Organiser labeled:"),
-          helpText(to_check),
-          helpText("Select and Apply Organisers before proceeding."),
-          hr()
-        )
-      }else{
-        list(
-          helpText("These records do not have an Organiser labeled:"),
-          helpText(to_check),
-          helpText("Select and Apply Organisers before proceeding."),
-          actionButton("go_organiser", "Proceed"),
-          hr()
-        )
+      if(!is.null(input$tabsets)){
+        if (input$tabsets != default_tabset){
+          if(input$tabsets == "Individual Record Data"){
+            list(
+              rank_list_rec(),
+              helpText("These records do not have an Organiser labeled:"),
+              helpText(to_check),
+              helpText("Select and Apply Organisers before proceeding."),
+              hr()
+            ) 
+          }
+          else if(input$tabsets == "Individual Record Plot"){
+            return()
+          }
+        }else{
+          list(
+            helpText("These records do not have an Organiser labeled:"),
+            helpText(to_check),
+            helpText("Select and Apply Organisers before proceeding."),
+            actionButton("go_organiser", "Proceed"),
+            hr()
+          )
+          }
+      }
+    }
+    else{
+      if(!is.null(input$tabsets)){
+        if (input$tabsets != default_tabset){
+          if(input$tabsets == "Individual Record Data"){
+            list(
+              rank_list_rec()
+            )
+          }
+          else if(input$tabsets == "Individual Record Plot"){
+            return()
+          }
+        }else{
+          list(
+            # helpText("You can now see the attendance plots for individual meeting records."),
+            actionButton("go_organiser", "Proceed"),
+            hr())
+        }
       }
     }
   })
@@ -813,7 +866,7 @@ server <- function(input, output, session) {
   })
   
   # this output keeps the selected record table after selecting an Organiser
-  output$single_record_table <- renderDataTable({
+  output$single_record_table <- DT::renderDT({
     if(is.null(input$file)){return()}
     srt()
   })
@@ -860,15 +913,31 @@ server <- function(input, output, session) {
   observeEvent(input$go_organiser, {
     updateTabsetPanel(inputId = "tabsets", selected = "Individual Record Data")
                                           # change this if you change tab names
-    selected_record_index(which(names(records()) == 
-                                names(records())[checkOrg()][[1]]))
-    selected_record_name(names(records())[checkOrg()][[1]])
+    # if(any(checkOrg())){
+    #   selected_record_index(which(names(records()) == 
+    #                                 names(records())[checkOrg()][[1]]))
+    #   selected_record_name(names(records())[checkOrg()][[1]])
+    # }else{
+    #   selected_record_index(which(names(records()) == 
+    #                                 names(records())[[1]]))
+    #   selected_record_name(names(records())[[1]])
+    # }
+    
     })
 
   # the functionality for the button that takes you to attendance plot tab
   observeEvent(input$go_att_plt, {
     updateTabsetPanel(inputId = "tabsets", selected = "Individual Record Plot")
-    # change this if you change tab names
+                                        # change this if you change tab names
+    # if(any(checkOrg())){
+    #   selected_record_index(which(names(records()) == 
+    #                                 names(records())[checkOrg()][[1]]))
+    #   selected_record_name(names(records())[checkOrg()][[1]])
+    # }else{
+    #   selected_record_index(which(names(records()) == 
+    #                                 names(records())[[1]]))
+    #   selected_record_name(names(records())[[1]])
+    # }
   })  
 
   
@@ -1068,14 +1137,14 @@ server <- function(input, output, session) {
       tabsetPanel(id="tabsets",
                   tabPanel("Uploaded Records", tableOutput("tb")),
                   tabPanel("Individual Record Data", 
-                           dataTableOutput("single_record_table")),
+                           DT::DTOutput("single_record_table")),
                   selected = selected_tabset()
       )
     }else{
       tabsetPanel(id="tabsets",
                   tabPanel("Uploaded Records", tableOutput("tb")),
                   tabPanel("Individual Record Data", 
-                           dataTableOutput("single_record_table")),
+                           DT::DTOutput("single_record_table")),
                   tabPanel("Individual Record Plot", 
                            plotOutput("single_record_plot"),
                            uiOutput("single_record_info")),
